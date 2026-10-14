@@ -265,7 +265,7 @@ func (w *world) paint(op *Op) (outlet, error) {
 	var origin pos
 	var shapeBelts, colorBelts []Placement
 	found := false
-	for _, candidate := range w.candidates(free) {
+	for _, candidate := range w.candidates(free, shapeOut.At) {
 		trial := w.base()
 		for _, t := range occupy {
 			trial[pos{candidate.X + t.X, candidate.Y + t.Y}] = true
@@ -317,7 +317,7 @@ func (w *world) binary(op *Op, id string) (outlet, error) {
 	var origin pos
 	var leftBelts, rightBelts []Placement
 	found := false
-	for _, candidate := range w.candidates(free) {
+	for _, candidate := range w.candidates(free, lower.At) {
 		trial := w.base()
 		for _, t := range occupy {
 			trial[pos{candidate.X + t.X, candidate.Y + t.Y}] = true
@@ -358,7 +358,7 @@ func (w *world) placeConnected(occupy, protect []pos, socket pos, socketOut stri
 	must := append([]pos{}, occupy...)
 	must = append(must, protect...)
 	must = append(must, socket)
-	for _, candidate := range w.candidates(must) {
+	for _, candidate := range w.candidates(must, child.At) {
 		trial := w.base()
 		for _, t := range occupy {
 			trial[pos{candidate.X + t.X, candidate.Y + t.Y}] = true
@@ -376,20 +376,29 @@ func (w *world) placeConnected(occupy, protect []pos, socket pos, socketOut stri
 	return pos{}, nil, fmt.Errorf("没有可连接的空位")
 }
 
-func (w *world) candidates(rel []pos) []pos {
+func (w *world) candidates(rel []pos, near pos) []pos {
 	var out []pos
-	for y := 8; y <= 150 && len(out) < 40; y++ {
-		for x := 8; x <= 80 && len(out) < 40; x++ {
-			ok := true
-			for _, t := range rel {
-				p := pos{x + t.X, y + t.Y}
-				if !inBounds(p) || w.blocked(p) {
-					ok = false
-					break
+	for r := 0; r <= 120 && len(out) < 80; r++ {
+		for dy := -r; dy <= r; dy++ {
+			for dx := -r; dx <= r; dx++ {
+				if abs(dx) != r && abs(dy) != r {
+					continue
 				}
-			}
-			if ok {
-				out = append(out, pos{x, y})
+				origin := pos{near.X + dx, near.Y + dy}
+				ok := true
+				for _, t := range rel {
+					p := pos{origin.X + t.X, origin.Y + t.Y}
+					if !inBounds(p) || w.blocked(p) {
+						ok = false
+						break
+					}
+				}
+				if ok {
+					out = append(out, origin)
+					if len(out) >= 80 {
+						return out
+					}
+				}
 			}
 		}
 	}
