@@ -75,15 +75,16 @@ func inBounds(p pos) bool {
 	return p.X >= -80 && p.X <= 160 && p.Y >= -80 && p.Y <= 220
 }
 
-// hubFeeds 是中枢四个方向的进料格。南、东、西、北各一条。
-var hubFeeds = []struct {
+// sideFeeds 是中枢四条边的进料格。每条边有四个接收口，优先用靠近中间的。
+// 南边传送带在 y=2 朝北，东边在 x=2 朝西，西边在 x=-3 朝东，北边在 y=-3 朝南。
+var sideFeeds = [][]struct {
 	at  pos
 	out string
 }{
-	{pos{0, 2}, "north"},
-	{pos{2, 0}, "west"},
-	{pos{-3, 0}, "east"},
-	{pos{0, -3}, "south"},
+	{{pos{0, 2}, "north"}, {pos{-1, 2}, "north"}, {pos{1, 2}, "north"}, {pos{-2, 2}, "north"}},
+	{{pos{2, 0}, "west"}, {pos{2, -1}, "west"}, {pos{2, 1}, "west"}, {pos{2, -2}, "west"}},
+	{{pos{-3, 0}, "east"}, {pos{-3, -1}, "east"}, {pos{-3, 1}, "east"}, {pos{-3, -2}, "east"}},
+	{{pos{0, -3}, "south"}, {pos{-1, -3}, "south"}, {pos{1, -3}, "south"}, {pos{-2, -3}, "south"}},
 }
 
 // Layout 把加工树摆到地图上，并把成品送进中枢南侧。
@@ -96,8 +97,8 @@ func LayoutCopies(op *Op, resources []Resource, copies int) ([]Placement, error)
 	if copies < 1 {
 		copies = 1
 	}
-	if copies > len(hubFeeds) {
-		copies = len(hubFeeds)
+	if copies > len(sideFeeds) {
+		copies = len(sideFeeds)
 	}
 	w := newWorld(resources)
 	done := 0
@@ -125,53 +126,77 @@ func LayoutCopies(op *Op, resources []Resource, copies int) ([]Placement, error)
 	return w.places, nil
 }
 
-// connectHub 把成品送进中枢。南侧入口先接到直线走廊，避免绕到中枢旁边却不进去。
+// connectHub 把成品送进中枢。先试直线走廊，某格被资源挡住时换同一条边上的其他接收口。
 func (w *world) connectHub(landing outlet, index int) ([]Placement, bool) {
-	if index == 0 {
-		if belts, ok := w.connectSouth(landing); ok {
-			return belts, true
+	if index < 0 || index >= len(sideFeeds) {
+		index = 0
+	}
+	order := []int{index, 0, 1, 2, 3}
+	seen := map[int]bool{}
+	for _, side := range order {
+		if seen[side] {
+			continue
+		}
+		seen[side] = true
+		if side == 0 {
+			if belts, ok := w.connectSouth(landing); ok {
+				return belts, true
+			}
+			continue
+		}
+		for _, feed := range sideFeeds[side] {
+			if w.blocked(feed.at) {
+				continue
+			}
+			if belts, ok := route(w.base(), landing.At, landing.In, feed.at, feed.out); ok {
+				return belts, true
+			}
 		}
 	}
-	feed := hubFeeds[index]
-	return route(w.base(), landing.At, landing.In, feed.at, feed.out)
+	return nil, false
 }
 
 // connectSouth 要求路径朝北到达走廊入口，后面几格固定是朝北的直带，末端对准中枢南侧。
 func (w *world) connectSouth(landing outlet) ([]Placement, bool) {
-	for span := 4; span <= 14; span++ {
-		gate := pos{0, 2 + span}
-		var corridor []pos
-		open := inBounds(gate) && !w.blocked(gate)
-		for y := gate.Y - 1; y >= 2; y-- {
-			p := pos{0, y}
-			if !inBounds(p) || w.blocked(p) {
-				open = false
-				break
+	for _, feed := range sideFeeds[0] {
+		if w.blocked(feed.at) {
+			continue
+		}
+		for span := 4; span <= 14; span++ {
+			gate := pos{feed.at.X, feed.at.Y + span}
+			var corridor []pos
+			open := inBounds(gate) && !w.blocked(gate)
+			for y := gate.Y - 1; y >= feed.at.Y; y-- {
+				p := pos{feed.at.X, y}
+				if !inBounds(p) || w.blocked(p) {
+					open = false
+					break
+				}
+				corridor = append(corridor, p)
 			}
-			corridor = append(corridor, p)
+			if !open || len(corridor) == 0 {
+				continue
+			}
+			trial := w.base()
+			for _, p := range corridor {
+				trial[p] = true
+			}
+			belts, ok := route(trial, landing.At, landing.In, gate, "north")
+			if !ok {
+				continue
+			}
+			rot, variant, poseOK := BeltPose("south", "north")
+			if !poseOK {
+				return nil, false
+			}
+			for _, p := range corridor {
+				belts = append(belts, Placement{
+					ID: "belt", X: p.X, Y: p.Y,
+					Rotation: rot, RotationVariant: variant, Variant: "default",
+				})
+			}
+			return belts, true
 		}
-		if !open || len(corridor) == 0 {
-			continue
-		}
-		trial := w.base()
-		for _, p := range corridor {
-			trial[p] = true
-		}
-		belts, ok := route(trial, landing.At, landing.In, gate, "north")
-		if !ok {
-			continue
-		}
-		rot, variant, poseOK := BeltPose("south", "north")
-		if !poseOK {
-			return nil, false
-		}
-		for _, p := range corridor {
-			belts = append(belts, Placement{
-				ID: "belt", X: p.X, Y: p.Y,
-				Rotation: rot, RotationVariant: variant, Variant: "default",
-			})
-		}
-		return belts, true
 	}
 	return nil, false
 }
@@ -564,6 +589,9 @@ func route(blocked occMap, start pos, startIn string, goal pos, goalOut string) 
 			return nil, false
 		}
 		if cur.x == goal.X && cur.y == goal.Y {
+			if cur.prev < 0 && goalOut != opposite(cur.in) {
+				continue
+			}
 			if _, _, ok := BeltPose(cur.in, goalOut); ok {
 				belts := rebuild(queue, item.i, goalOut)
 				if len(belts) > 0 {
@@ -573,6 +601,9 @@ func route(blocked occMap, start pos, startIn string, goal pos, goalOut string) 
 			continue
 		}
 		for _, out := range dirs {
+			if cur.prev < 0 && out != opposite(cur.in) {
+				continue
+			}
 			if _, _, ok := BeltPose(cur.in, out); !ok {
 				continue
 			}

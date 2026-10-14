@@ -159,6 +159,40 @@ func TestSouthFeedIsStraight(t *testing.T) {
 	}
 }
 
+func TestSouthFeedAvoidsBlockedCenter(t *testing.T) {
+	res := testResources()
+	for y := 2; y <= 16; y++ {
+		res = append(res, Resource{X: 0, Y: y, Kind: "shape", Key: "CuCuCuCu"})
+	}
+	built, err := Compile(Request{
+		Level:     2,
+		Shape:     "----CuCu",
+		Rewards:   []string{"reward_cutter_and_trash"},
+		Resources: res,
+	}, 8, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.Error != "" {
+		t.Fatal(built.Error)
+	}
+	var feed *Placement
+	for i := range built.Placements {
+		p := &built.Placements[i]
+		if p.ID == "belt" && p.Y == 2 && p.X >= -2 && p.X <= 1 && p.X != 0 {
+			feed = p
+			break
+		}
+	}
+	if feed == nil {
+		t.Fatal("正南被挡住后没有改接到旁边的入口")
+	}
+	in, out := BeltIO(feed.Rotation, feed.RotationVariant)
+	if in != "south" || out != "north" {
+		t.Fatalf("入口方向是 %s -> %s", in, out)
+	}
+}
+
 func reachesHub(places []Placement) bool {
 	type building struct {
 		id  string
