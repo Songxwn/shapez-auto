@@ -133,6 +133,82 @@ func Compile(req Request, warp int, override *Program, speedup int) (Plan, error
 	return plan, nil
 }
 
+// CompileExternal 只摆外部模型给出的加工步骤。演算或布局失败时不改用内置求解。
+func CompileExternal(req Request, warp int, program *Program, speedup int) Plan {
+	if warp < 1 {
+		warp = 8
+	}
+	if speedup < 0 {
+		speedup = 0
+	}
+	if speedup > 3 {
+		speedup = 3
+	}
+	if speedup > 0 {
+		warp *= 1 + speedup
+		if warp > 60 {
+			warp = 60
+		}
+	}
+	if req.ThroughputOnly && warp < 16 {
+		warp = 16
+	}
+	base := Plan{
+		Action: "error",
+		Level:  req.Level,
+		Shape:  req.Shape,
+		Warp:   warp,
+		Source: "llm",
+	}
+	if program == nil || len(program.Nodes) == 0 {
+		base.Error = "外部模型没有给出加工步骤"
+		base.ID = planKey(req, base.Error)
+		return base
+	}
+	copies := 1 + speedup
+	if program.Copies > copies {
+		copies = program.Copies
+	}
+	if copies > 4 {
+		copies = 4
+	}
+	alt, err := ParseProgram(program.Nodes)
+	if err != nil {
+		base.Error = err.Error()
+		base.ID = planKey(req, base.Error)
+		return base
+	}
+	got, err := Eval(alt)
+	if err != nil {
+		base.Error = err.Error()
+		base.ID = planKey(req, base.Error)
+		return base
+	}
+	if got.Form.Hash() != req.Shape {
+		base.Error = fmt.Sprintf("外部模型演算结果 %s 与目标 %s 不一致", got.Form.Hash(), req.Shape)
+		base.ID = planKey(req, base.Error)
+		return base
+	}
+	places, err := LayoutCopies(alt, req.Resources, copies)
+	if err != nil {
+		base.Error = err.Error()
+		base.ID = planKey(req, base.Error)
+		return base
+	}
+	base.Action = "build"
+	base.Error = ""
+	base.Placements = places
+	if program.Comment != "" {
+		base.Comment = program.Comment
+	} else if speedup > 0 {
+		base.Comment = fmt.Sprintf("外部模型重新设计，并行 %d 条产线", copies)
+	} else {
+		base.Comment = "已采用外部模型给出的加工步骤"
+	}
+	base.ID = planKey(req, fmt.Sprintf("llm-%d-%d-%s", len(places), speedup, base.Comment))
+	return base
+}
+
 func planKey(req Request, extra string) string {
 	sum := sha1.Sum([]byte(fmt.Sprintf("%d|%s|%s|%v", req.Level, req.Shape, extra, req.Rewards)))
 	return hex.EncodeToString(sum[:8])

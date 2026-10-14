@@ -2,7 +2,7 @@ const METADATA = {
     website: "https://github.com/Songxwn/shapez-auto",
     author: "shapez-auto",
     name: "shapez-auto",
-    version: "0.1.4",
+    version: "0.1.5",
     id: "shapez-auto",
     description: "Connects to a local planner and completes levels automatically.",
     minimumGameVersion: ">=1.5.0",
@@ -50,6 +50,17 @@ class Mod extends shapez.Mod {
         if (!this.root || this.busy || !this.root.hubGoals) return;
         this.busy = true;
         try {
+            const levelNow = this.root.hubGoals.level;
+            const goalNow = this.root.hubGoals.currentGoal;
+            const shapeNow = goalNow && goalNow.definition ? goalNow.definition.getHash() : "";
+            const levelKey = levelNow + ":" + shapeNow;
+            if (this.playing && shapeNow && this.clearedKey !== levelKey) {
+                this.clearFactory();
+                this.lastPlan = "";
+                this.missed = 0;
+                this.clearedKey = levelKey;
+                this.badge("第 " + levelNow + " 关，已清空流水线，等待外部模型重新设计");
+            }
             const snap = this.snapshot();
             if (this.playing) this.dismissOverlays();
             const res = await fetch("http://127.0.0.1:17831/api/tick", {
@@ -155,6 +166,26 @@ class Mod extends shapez.Mod {
             out.push({ x: found[i].x, y: found[i].y, kind: found[i].kind, key: found[i].key });
         }
         return out;
+    }
+
+    clearFactory() {
+        const root = this.root;
+        if (!root || !root.logic || !root.entityMgr) return;
+        const run = () => {
+            const list = [];
+            const ents = root.entityMgr.entities || [];
+            for (let i = 0; i < ents.length; i++) list.push(ents[i]);
+            for (let i = 0; i < list.length; i++) {
+                const entity = list[i];
+                if (!entity || !entity.components || entity.components.Hub || entity.destroyed) continue;
+                try { root.logic.tryDeleteBuilding(entity); } catch (err) {}
+            }
+        };
+        try {
+            root.logic.performBulkOperation(run);
+        } catch (err) {
+            root.bulkOperationRunning = false;
+        }
     }
 
     apply(plan) {

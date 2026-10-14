@@ -48,8 +48,7 @@ type pace struct {
 	shape     string
 	mark      time.Time
 	delivered float64
-	speedups  int
-	solver    bool
+	speedups int
 }
 
 // New 创建控制面并读取已保存的设置。
@@ -287,10 +286,11 @@ func (s *Service) tick(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, plan.Plan{Action: "done", Comment: "已达到设定关卡"})
 		return
 	}
-	if req.Missed > 0 && !s.pace.solver {
-		s.pace.solver = true
-		s.log(fmt.Sprintf("有 %d 个建筑没放上，改用内置产线", req.Missed))
-	} else if s.lastPlan.Action == "build" && s.lastPlan.Level == req.Level && s.lastPlan.Shape == req.Shape && s.lastPlan.ID != "" {
+	freshLevel := s.lastPlan.Level != req.Level || s.lastPlan.Shape != req.Shape
+	if req.Missed > 0 && !freshLevel && s.lastPlan.Action == "build" && s.pace.speedups < 3 {
+		s.pace.speedups++
+		s.log(fmt.Sprintf("有 %d 个建筑没放上，请外部模型重新设计", req.Missed))
+	} else if !freshLevel && s.lastPlan.Action == "build" && s.lastPlan.ID != "" {
 		if !s.shouldSpeedUp(req) {
 			cached := s.lastPlan
 			s.mu.Unlock()
@@ -302,19 +302,17 @@ func (s *Service) tick(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg
 	speedup := s.pace.speedups
-	forceSolver := s.pace.solver || (speedup > 0 && req.Delivered <= s.pace.delivered+0.5)
-	if forceSolver {
-		s.pace.solver = true
-	}
-	if speedup > 0 {
-		s.log(fmt.Sprintf("第 %d 关推进偏慢，第 %d 次加快产线", req.Level, speedup))
+	if freshLevel {
+		s.log(fmt.Sprintf("第 %d 关 %s，清空流水线后请外部模型重新设计", req.Level, req.Shape))
+	} else if speedup > 0 {
+		s.log(fmt.Sprintf("第 %d 关推进偏慢，第 %d 次请外部模型重新设计", req.Level, speedup))
 	} else {
-		s.log(fmt.Sprintf("第 %d 关 %s，开始规划", req.Level, req.Shape))
+		s.log(fmt.Sprintf("第 %d 关 %s，请外部模型设计", req.Level, req.Shape))
 	}
 	prev := s.lastPlan
 	s.mu.Unlock()
 
-	built := s.build(req, cfg, speedup, forceSolver)
+	built := s.build(req, cfg, speedup)
 
 	s.mu.Lock()
 	if built.Action != "build" && speedup > 0 && prev.Action == "build" {
@@ -379,37 +377,28 @@ func slowProgress(throughput bool, required, before, now float64, elapsed time.D
 	return eta > 120
 }
 
-func (s *Service) build(req plan.Request, cfg Config, speedup int, forceSolver bool) plan.Plan {
-	var override *plan.Program
+func (s *Service) build(req plan.Request, cfg Config, speedup int) plan.Plan {
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return plan.Plan{Action: "error", Level: req.Level, Shape: req.Shape, Error: "请先填写外部模型的 API Key"}
+	}
 	hint := ""
 	if speedup > 0 {
 		copies := 1 + speedup
 		if copies > 4 {
 			copies = 4
 		}
-		hint = fmt.Sprintf("第 %d 次加快。请把 copies 设为 %d，用并行产线提高吞吐，目标形状不变。", speedup, copies)
+		hint = fmt.Sprintf("第 %d 次重新设计。请把 copies 设为 %d，用并行产线提高吞吐，目标形状不变。", speedup, copies)
 	}
-	if forceSolver {
-		s.mu.Lock()
-		s.log("当前产线没有送进中枢，停止使用外部模型，改用内置直线入口")
-		s.mu.Unlock()
-	} else if strings.TrimSpace(cfg.APIKey) != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
-		defer cancel()
-		program, err := llm.Complete(ctx, cfg.BaseURL, cfg.APIKey, cfg.Model, req.Shape, req.Rewards, resourceSummary(req.Resources), hint)
-		if err != nil {
-			s.mu.Lock()
-			s.log("外部模型不可用，改用内置求解: " + err.Error())
-			s.mu.Unlock()
-		} else {
-			override = program
-		}
-	}
-	built, err := plan.Compile(req, cfg.Warp, override, speedup)
+	ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
+	defer cancel()
+	program, err := llm.Complete(ctx, cfg.BaseURL, cfg.APIKey, cfg.Model, req.Shape, req.Rewards, resourceSummary(req.Resources), hint)
 	if err != nil {
-		return plan.Plan{Action: "error", Error: err.Error(), Level: req.Level, Shape: req.Shape}
+		s.mu.Lock()
+		s.log("外部模型没有给出可用方案: " + err.Error())
+		s.mu.Unlock()
+		return plan.Plan{Action: "error", Level: req.Level, Shape: req.Shape, Error: err.Error()}
 	}
-	return built
+	return plan.CompileExternal(req, cfg.Warp, program, speedup)
 }
 
 func resourceSummary(resources []plan.Resource) []string {
