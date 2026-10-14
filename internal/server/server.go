@@ -37,10 +37,11 @@ type Service struct {
 	lastPlan plan.Plan
 	index    []byte
 	mod      []byte
+	icon     []byte
 }
 
 // New 创建控制面并读取已保存的设置。
-func New(index, modJS []byte) *Service {
+func New(index, modJS, icon []byte) *Service {
 	cfg := Config{
 		BaseURL:  "https://api.openai.com/v1",
 		Model:    "gpt-4o-mini",
@@ -63,7 +64,7 @@ func New(index, modJS []byte) *Service {
 	if cfg.Model == "" {
 		cfg.Model = "gpt-4o-mini"
 	}
-	s := &Service{cfg: cfg, cfgPath: path, index: index, mod: modJS}
+	s := &Service{cfg: cfg, cfgPath: path, index: index, mod: modJS, icon: icon}
 	s.log("控制面已启动")
 	return s
 }
@@ -71,6 +72,7 @@ func New(index, modJS []byte) *Service {
 // Handler 提供页面和接口。
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/favicon.ico", s.favicon)
 	mux.HandleFunc("/", s.page)
 	mux.HandleFunc("/api/status", s.status)
 	mux.HandleFunc("/api/config", s.saveConfig)
@@ -80,6 +82,11 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/api/stop", s.stop)
 	mux.HandleFunc("/api/tick", s.tick)
 	return cors(mux)
+}
+
+func (s *Service) favicon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/x-icon")
+	_, _ = w.Write(s.icon)
 }
 
 func (s *Service) page(w http.ResponseWriter, r *http.Request) {

@@ -15,7 +15,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:17831", "控制面监听地址")
 	flag.Parse()
 
-	svc := server.New(assets.IndexHTML, assets.ModJS)
+	svc := server.New(assets.IndexHTML, assets.ModJS, assets.IconICO)
 	url := "http://" + *addr + "/"
 	go func() {
 		_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()

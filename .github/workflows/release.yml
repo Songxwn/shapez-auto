@@ -24,6 +24,10 @@ jobs:
 
       - name: Build Windows amd64
         run: |
+          go install github.com/tc-hib/go-winres@v0.3.1
+          Push-Location cmd/shapez-auto
+          go-winres make --arch amd64
+          Pop-Location
           New-Item -ItemType Directory -Force dist | Out-Null
           go build -trimpath -ldflags "-s -w" -o dist/shapez-auto.exe ./cmd/shapez-auto
 
