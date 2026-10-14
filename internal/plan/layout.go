@@ -588,8 +588,14 @@ func route(blocked occMap, start pos, startIn string, goal pos, goalOut string) 
 		if pops > 100000 {
 			return nil, false
 		}
+		straight := opposite(cur.in)
+		forwardBlocked := false
+		if cur.prev < 0 {
+			fx, fy := step(cur.x, cur.y, straight)
+			forwardBlocked = !inBounds(pos{fx, fy}) || blocked[pos{fx, fy}]
+		}
 		if cur.x == goal.X && cur.y == goal.Y {
-			if cur.prev < 0 && goalOut != opposite(cur.in) {
+			if cur.prev < 0 && !forwardBlocked && goalOut != straight {
 				continue
 			}
 			if _, _, ok := BeltPose(cur.in, goalOut); ok {
@@ -601,7 +607,7 @@ func route(blocked occMap, start pos, startIn string, goal pos, goalOut string) 
 			continue
 		}
 		for _, out := range dirs {
-			if cur.prev < 0 && out != opposite(cur.in) {
+			if cur.prev < 0 && !forwardBlocked && out != straight {
 				continue
 			}
 			if _, _, ok := BeltPose(cur.in, out); !ok {

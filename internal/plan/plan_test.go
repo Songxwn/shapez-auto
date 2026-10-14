@@ -176,20 +176,13 @@ func TestSouthFeedAvoidsBlockedCenter(t *testing.T) {
 	if built.Error != "" {
 		t.Fatal(built.Error)
 	}
-	var feed *Placement
-	for i := range built.Placements {
-		p := &built.Placements[i]
-		if p.ID == "belt" && p.Y == 2 && p.X >= -2 && p.X <= 1 && p.X != 0 {
-			feed = p
-			break
+	if !reachesHub(built.Placements) {
+		t.Fatal("正南被挡住后没有送到中枢")
+	}
+	for _, p := range built.Placements {
+		if p.X == 0 && p.Y >= 2 && p.Y <= 16 {
+			t.Fatalf("建筑放在了被挡住的 (%d,%d)", p.X, p.Y)
 		}
-	}
-	if feed == nil {
-		t.Fatal("正南被挡住后没有改接到旁边的入口")
-	}
-	in, out := BeltIO(feed.Rotation, feed.RotationVariant)
-	if in != "south" || out != "north" {
-		t.Fatalf("入口方向是 %s -> %s", in, out)
 	}
 }
 
