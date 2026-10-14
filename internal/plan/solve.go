@@ -156,10 +156,69 @@ func Solve(key string, u Unlock) (*Op, error) {
 }
 
 func solveForm(f shape.Form, u Unlock) (*Op, error) {
+	op, err := solveMemo(f, u, map[string]memoEnt{})
+	if err != nil {
+		return nil, err
+	}
+	got, evalErr := Eval(op)
+	if evalErr != nil {
+		return nil, evalErr
+	}
+	if got.Form.Hash() != f.Hash() {
+		return nil, fmt.Errorf("演算结果 %s 与目标 %s 不一致", got.Form.Hash(), f.Hash())
+	}
+	return op, nil
+}
+
+type memoEnt struct {
+	op  *Op
+	err error
+	ok  bool
+}
+
+func solveMemo(f shape.Form, u Unlock, memo map[string]memoEnt) (*Op, error) {
+	key := f.Hash()
+	if ent, ok := memo[key]; ok {
+		return ent.op, ent.err
+	}
+	op, err := solveOnce(f, u, memo)
+	memo[key] = memoEnt{op: op, err: err, ok: true}
+	return op, err
+}
+
+func solveOnce(f shape.Form, u Unlock, memo map[string]memoEnt) (*Op, error) {
+	if len(f) == 0 {
+		return nil, fmt.Errorf("空形状")
+	}
 	if len(f) == 1 {
 		return solveLayer(f[0], u)
 	}
-	if !u.Stacker {
+	if !hasFloat(f) {
+		op, err := stackLayers(f, u)
+		if err == nil {
+			return op, nil
+		}
+	}
+	if left, right := halfSides(f); left != right && hasFloat(f) {
+		if op, err := pinAndCut(f, left, u); err == nil {
+			if got, evalErr := Eval(op); evalErr == nil && got.Form.Hash() == f.Hash() {
+				return op, nil
+			}
+		}
+	}
+	if n := countCells(f); n <= 14 {
+		if op, err := splitStack(f, u, memo); err == nil {
+			return op, nil
+		}
+	}
+	return nil, fmt.Errorf("还不会搭 %s", f.Hash())
+}
+
+func stackLayers(f shape.Form, u Unlock) (*Op, error) {
+	if hasFloat(f) && len(f) > 1 {
+		return nil, fmt.Errorf("有悬空层")
+	}
+	if !u.Stacker && len(f) > 1 {
 		return nil, fmt.Errorf("这一关还没有堆叠器，无法做多层形状")
 	}
 	var acc *Op
@@ -174,7 +233,168 @@ func solveForm(f shape.Form, u Unlock) (*Op, error) {
 		}
 		acc = &Op{Kind: "stack", A: acc, B: part}
 	}
+	got, err := Eval(acc)
+	if err != nil {
+		return nil, err
+	}
+	if got.Form.Hash() != f.Hash() {
+		return nil, fmt.Errorf("逐层堆叠会塌成 %s", got.Form.Hash())
+	}
 	return acc, nil
+}
+
+func hasFloat(f shape.Form) bool {
+	for layer := 1; layer < len(f); layer++ {
+		for q := 0; q < 4; q++ {
+			if !f[layer][q].Empty() && f[layer-1][q].Empty() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func halfSides(f shape.Form) (left, right bool) {
+	for _, layer := range f {
+		if !layer[2].Empty() || !layer[3].Empty() {
+			left = true
+		}
+		if !layer[0].Empty() || !layer[1].Empty() {
+			right = true
+		}
+	}
+	return left, right
+}
+
+func countCells(f shape.Form) int {
+	n := 0
+	for _, layer := range f {
+		for q := 0; q < 4; q++ {
+			if !layer[q].Empty() {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// pinAndCut 在空的那一半加上会互相顶住的支撑，堆高后再切掉支撑，从而留下悬空象限。
+func pinAndCut(f shape.Form, keepLeft bool, u Unlock) (*Op, error) {
+	support := 0
+	cut := "cutRight"
+	if keepLeft {
+		support = 0
+		cut = "cutLeft"
+	} else {
+		support = 2
+		cut = "cutRight"
+	}
+	var acc *Op
+	for _, layer := range f {
+		augmented := layer
+		if !augmented[support].Empty() {
+			return nil, fmt.Errorf("支撑象限已被占用")
+		}
+		augmented[support] = shape.Cell{S: 'R', C: 'u'}
+		part, err := solveLayer(augmented, u)
+		if err != nil {
+			return nil, err
+		}
+		if acc == nil {
+			acc = part
+			continue
+		}
+		if !u.Stacker {
+			return nil, fmt.Errorf("这一关还没有堆叠器，无法做多层形状")
+		}
+		acc = &Op{Kind: "stack", A: acc, B: part}
+	}
+	return &Op{Kind: cut, A: acc}, nil
+}
+
+type placedCell struct {
+	layer int
+	quad  int
+	cell  shape.Cell
+}
+
+func splitStack(f shape.Form, u Unlock, memo map[string]memoEnt) (*Op, error) {
+	if !u.Stacker {
+		return nil, fmt.Errorf("这一关还没有堆叠器，无法做多层形状")
+	}
+	var cells []placedCell
+	for layer := range f {
+		for q := 0; q < 4; q++ {
+			if !f[layer][q].Empty() {
+				cells = append(cells, placedCell{layer, q, f[layer][q]})
+			}
+		}
+	}
+	n := len(cells)
+	if n < 2 || n > 14 {
+		return nil, fmt.Errorf("无法拆开 %s", f.Hash())
+	}
+	limit := 1 << n
+	for mask := 1; mask < limit-1; mask++ {
+		upper, okU := maskForm(f, cells, mask, true)
+		lower, okL := maskForm(f, cells, mask, false)
+		if !okU || !okL {
+			continue
+		}
+		stacked, err := shape.Stack(lower, upper)
+		if err != nil || stacked.Hash() != f.Hash() {
+			continue
+		}
+		if countCells(lower) >= n || countCells(upper) >= n {
+			continue
+		}
+		lowOp, lowErr := solveMemo(lower, u, memo)
+		if lowErr != nil {
+			continue
+		}
+		upOp, upErr := solveMemo(upper, u, memo)
+		if upErr != nil {
+			continue
+		}
+		return &Op{Kind: "stack", A: lowOp, B: upOp}, nil
+	}
+	return nil, fmt.Errorf("无法拆开 %s", f.Hash())
+}
+
+func maskForm(src shape.Form, cells []placedCell, mask int, upper bool) (shape.Form, bool) {
+	layers := make(shape.Form, len(src))
+	used := false
+	minL, maxL := len(src), -1
+	for i, cell := range cells {
+		take := mask&(1<<i) != 0
+		if take != upper {
+			continue
+		}
+		layers[cell.layer][cell.quad] = cell.cell
+		used = true
+		if cell.layer < minL {
+			minL = cell.layer
+		}
+		if cell.layer > maxL {
+			maxL = cell.layer
+		}
+	}
+	if !used {
+		return nil, false
+	}
+	for layer := minL; layer <= maxL; layer++ {
+		empty := true
+		for q := 0; q < 4; q++ {
+			if !layers[layer][q].Empty() {
+				empty = false
+				break
+			}
+		}
+		if empty {
+			return nil, false
+		}
+	}
+	return layers[minL : maxL+1], true
 }
 
 func solveLayer(layer shape.Layer, u Unlock) (*Op, error) {

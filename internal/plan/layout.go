@@ -1,6 +1,9 @@
 package plan
 
-import "fmt"
+import (
+	"container/heap"
+	"fmt"
+)
 
 // Placement 是游戏里的一次放置。坐标是格子，旋转单位是度。
 type Placement struct {
@@ -404,6 +407,26 @@ type routeNode struct {
 	x, y int
 	in   string
 	prev int
+	g    int
+}
+
+type routeQ struct {
+	i   int
+	pri int
+}
+
+type routePQ []routeQ
+
+func (q routePQ) Len() int           { return len(q) }
+func (q routePQ) Less(i, j int) bool { return q[i].pri < q[j].pri }
+func (q routePQ) Swap(i, j int)      { q[i], q[j] = q[j], q[i] }
+func (q *routePQ) Push(x any)        { *q = append(*q, x.(routeQ)) }
+func (q *routePQ) Pop() any {
+	old := *q
+	n := len(old)
+	item := old[n-1]
+	*q = old[:n-1]
+	return item
 }
 
 func route(blocked occMap, start pos, startIn string, goal pos, goalOut string) ([]Placement, bool) {
@@ -413,17 +436,26 @@ func route(blocked occMap, start pos, startIn string, goal pos, goalOut string) 
 	if blocked[goal] || blocked[start] {
 		return nil, false
 	}
-	queue := []routeNode{{x: start.X, y: start.Y, in: startIn, prev: -1}}
-	seen := map[[3]int]bool{{start.X, start.Y, dirCode(startIn)}: true}
+	queue := []routeNode{{x: start.X, y: start.Y, in: startIn, prev: -1, g: 0}}
+	best := map[[3]int]int{{start.X, start.Y, dirCode(startIn)}: 0}
+	pq := routePQ{{i: 0, pri: abs(start.X-goal.X) + abs(start.Y-goal.Y)}}
+	heap.Init(&pq)
 	dirs := []string{"north", "east", "south", "west"}
-	for head := 0; head < len(queue); head++ {
-		if len(queue) > 25000 {
+	pops := 0
+	for pq.Len() > 0 {
+		item := heap.Pop(&pq).(routeQ)
+		cur := queue[item.i]
+		key := [3]int{cur.x, cur.y, dirCode(cur.in)}
+		if g, ok := best[key]; ok && g < cur.g {
+			continue
+		}
+		pops++
+		if pops > 100000 {
 			return nil, false
 		}
-		cur := queue[head]
 		if cur.x == goal.X && cur.y == goal.Y {
 			if _, _, ok := BeltPose(cur.in, goalOut); ok {
-				belts := rebuild(queue, head, goalOut)
+				belts := rebuild(queue, item.i, goalOut)
 				if len(belts) > 0 {
 					return belts, true
 				}
@@ -439,16 +471,19 @@ func route(blocked occMap, start pos, startIn string, goal pos, goalOut string) 
 			if !inBounds(next) || blocked[next] {
 				continue
 			}
-			if onPath(queue, head, nx, ny) {
+			if onPath(queue, item.i, nx, ny) {
 				continue
 			}
 			nextIn := opposite(out)
-			key := [3]int{nx, ny, dirCode(nextIn)}
-			if seen[key] {
+			nextKey := [3]int{nx, ny, dirCode(nextIn)}
+			ng := cur.g + 1
+			if old, ok := best[nextKey]; ok && ng >= old {
 				continue
 			}
-			seen[key] = true
-			queue = append(queue, routeNode{x: nx, y: ny, in: nextIn, prev: head})
+			best[nextKey] = ng
+			queue = append(queue, routeNode{x: nx, y: ny, in: nextIn, prev: item.i, g: ng})
+			pri := ng + abs(nx-goal.X) + abs(ny-goal.Y)
+			heap.Push(&pq, routeQ{i: len(queue) - 1, pri: pri})
 		}
 	}
 	return nil, false
