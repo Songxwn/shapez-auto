@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>shapez-auto</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font: 15px/1.5 "Segoe UI", sans-serif; background: #17191e; color: #e7e9ee; }
+    main { max-width: 820px; margin: 0 auto; padding: 28px 20px 48px; }
+    h1 { font-size: 28px; margin: 0 0 6px; }
+    p { color: #b7bdc9; }
+    section { background: #22262e; border: 1px solid #343a46; border-radius: 12px; padding: 16px; margin-top: 16px; }
+    label { display: block; margin: 10px 0 4px; color: #c5cad3; }
+    input[type="text"], input[type="password"], input[type="number"] {
+      width: 100%; box-sizing: border-box; background: #12141a; color: #fff;
+      border: 1px solid #3c4350; border-radius: 8px; padding: 8px 10px;
+    }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    .checks { margin-top: 12px; }
+    button { background: #3d8bfd; color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; margin: 12px 8px 0 0; cursor: pointer; }
+    button.quiet { background: #3a404c; }
+    button.stop { background: #c44b4b; }
+    #log { white-space: pre-wrap; background: #101218; border-radius: 8px; padding: 10px; min-height: 160px; font-family: Consolas, monospace; font-size: 13px; }
+    .stat { font-size: 18px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>shapez-auto</h1>
+  <p>接入外部大模型，驱动 Steam 版 shapez.io 自动摆厂并加速通关。网页版游戏没有模组接口，不能使用。</p>
+
+  <section>
+    <div class="stat" id="state">正在连接控制面</div>
+    <div id="goal"></div>
+  </section>
+
+  <section>
+    <h2>外部模型</h2>
+    <label>接口地址（OpenAI 兼容，以 /v1 结尾）</label>
+    <input id="baseUrl" type="text" value="https://api.openai.com/v1">
+    <div class="row">
+      <div>
+        <label>模型</label>
+        <input id="model" type="text" value="gpt-4o-mini">
+      </div>
+      <div>
+        <label>API Key</label>
+        <input id="apiKey" type="password" placeholder="留空则只用内置求解">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>加速倍数</label>
+        <input id="warp" type="number" min="1" max="60" value="10">
+      </div>
+      <div>
+        <label>主线停在第几关</label>
+        <input id="maxLevel" type="number" min="1" max="26" value="26">
+      </div>
+    </div>
+    <label class="checks"><input id="freeplay" type="checkbox"> 主线结束后继续自由模式</label>
+    <div>
+      <button id="save">保存设置</button>
+      <button id="install" class="quiet">安装游戏模组</button>
+      <button id="start">开始自动通关</button>
+      <button id="stop" class="stop">停止</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>记录</h2>
+    <div id="log"></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function fill(data) {
+  $("baseUrl").value = data.baseUrl || "";
+  $("model").value = data.model || "";
+  $("warp").value = data.warp || 10;
+  $("maxLevel").value = data.maxLevel || 26;
+  $("freeplay").checked = !!data.freeplay;
+  if (data.hasKey) $("apiKey").placeholder = "已保存，留空表示不修改";
+  $("state").textContent = data.running ? "自动通关进行中" : "已停止";
+  if (data.level) {
+    const done = Math.floor(data.delivered || 0);
+    $("goal").textContent = "第 " + data.level + " 关  " + (data.shape || "") + "  " + done + " / " + (data.required || "?");
+  } else {
+    $("goal").textContent = "还没有收到游戏里的关卡。安装模组、重启游戏并进入一局后才会出现。";
+  }
+  $("log").textContent = (data.logs || []).join("\n");
+}
+
+async function refresh() {
+  try { fill(await api("/api/status")); }
+  catch (err) { $("state").textContent = "控制面没有响应"; }
+}
+
+$("save").onclick = async () => {
+  await api("/api/config", {
+    baseUrl: $("baseUrl").value,
+    model: $("model").value,
+    apiKey: $("apiKey").value,
+    warp: Number($("warp").value),
+    maxLevel: Number($("maxLevel").value),
+    freeplay: $("freeplay").checked,
+  });
+  $("apiKey").value = "";
+  refresh();
+};
+$("install").onclick = async () => { await api("/api/install-mod", {}); refresh(); };
+$("start").onclick = async () => { await api("/api/start", {}); refresh(); };
+$("stop").onclick = async () => { await api("/api/stop", {}); refresh(); };
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>
