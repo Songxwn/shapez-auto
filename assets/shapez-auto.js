@@ -2,7 +2,7 @@ const METADATA = {
     website: "https://github.com/Songxwn/shapez-auto",
     author: "shapez-auto",
     name: "shapez-auto",
-    version: "0.1.0",
+    version: "0.1.1",
     id: "shapez-auto",
     description: "Connects to a local planner and completes levels automatically.",
     minimumGameVersion: ">=1.5.0",

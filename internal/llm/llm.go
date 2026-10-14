@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -79,6 +81,100 @@ func Complete(ctx context.Context, baseURL, apiKey, model, shape string, rewards
 		return nil, err
 	}
 	return &program, nil
+}
+
+// ListModels 请求 OpenAI 兼容的 /models，返回可用模型 id。
+func ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
+	endpoint, err := ModelsURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if key := strings.TrimSpace(apiKey); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode >= 300 {
+		return nil, fmt.Errorf("模型列表 %s: %s", res.Status, trim(raw))
+	}
+	return ParseModelIDs(raw)
+}
+
+// ModelsURL 把用户填写的接口根地址转成模型列表地址。
+func ModelsURL(baseURL string) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	lower := strings.ToLower(base)
+	const suffix = "/chat/completions"
+	if strings.HasSuffix(lower, suffix) {
+		base = strings.TrimRight(base[:len(base)-len(suffix)], "/")
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("接口地址需要是 http 或 https，例如 https://api.openai.com/v1")
+	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("接口地址不要包含账号密码")
+	}
+	return base + "/models", nil
+}
+
+// ParseModelIDs 解析 OpenAI 兼容接口或常见的 models 数组。
+func ParseModelIDs(raw []byte) ([]string, error) {
+	var payload struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+		Models []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"models"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("模型列表不是 JSON")
+	}
+	if payload.Error != nil && payload.Error.Message != "" {
+		return nil, fmt.Errorf("%s", payload.Error.Message)
+	}
+	seen := map[string]struct{}{}
+	add := func(id, name string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			id = strings.TrimSpace(name)
+		}
+		if id == "" {
+			return
+		}
+		seen[id] = struct{}{}
+	}
+	for _, item := range payload.Data {
+		add(item.ID, item.Name)
+	}
+	for _, item := range payload.Models {
+		add(item.ID, item.Name)
+	}
+	if len(seen) == 0 {
+		return nil, fmt.Errorf("接口没有返回模型")
+	}
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func trim(raw []byte) string {

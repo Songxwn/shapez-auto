@@ -1,7 +1,7 @@
 [Setup]
 AppId={{A7B3E2C1-5D44-4F1A-9C3E-8B2D6F0A1E77}
 AppName=shapez-auto
-AppVersion=0.1.0
+AppVersion=0.1.1
 AppPublisher=shapez-auto
 DefaultDirName={localappdata}\Programs\shapez-auto
 DefaultGroupName=shapez-auto

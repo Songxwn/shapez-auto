@@ -38,11 +38,12 @@
   <section>
     <h2>外部模型</h2>
     <label>接口地址（OpenAI 兼容，以 /v1 结尾）</label>
-    <input id="baseUrl" type="text" value="https://api.openai.com/v1">
+    <input id="baseUrl" type="text" value="https://api.openai.com/v1" autocomplete="off" spellcheck="false">
     <div class="row">
       <div>
         <label>模型</label>
-        <input id="model" type="text" value="gpt-4o-mini">
+        <input id="model" type="text" list="modelList" value="gpt-4o-mini" autocomplete="off" spellcheck="false">
+        <datalist id="modelList"></datalist>
       </div>
       <div>
         <label>API Key</label>
@@ -61,11 +62,13 @@
     </div>
     <label class="checks"><input id="freeplay" type="checkbox"> 主线结束后继续自由模式</label>
     <div>
+      <button id="probe" class="quiet">探测可用模型</button>
       <button id="save">保存设置</button>
       <button id="install" class="quiet">安装游戏模组</button>
       <button id="start">开始自动通关</button>
       <button id="stop" class="stop">停止</button>
     </div>
+    <p id="formMsg"></p>
   </section>
 
   <section>
@@ -86,12 +89,17 @@ async function api(path, body) {
   return res.json();
 }
 
+let formReady = false;
+
 function fill(data) {
-  $("baseUrl").value = data.baseUrl || "";
-  $("model").value = data.model || "";
-  $("warp").value = data.warp || 10;
-  $("maxLevel").value = data.maxLevel || 26;
-  $("freeplay").checked = !!data.freeplay;
+  if (!formReady) {
+    $("baseUrl").value = data.baseUrl || "";
+    $("model").value = data.model || "";
+    $("warp").value = data.warp || 10;
+    $("maxLevel").value = data.maxLevel || 26;
+    $("freeplay").checked = !!data.freeplay;
+    formReady = true;
+  }
   if (data.hasKey) $("apiKey").placeholder = "已保存，留空表示不修改";
   $("state").textContent = data.running ? "自动通关进行中" : "已停止";
   if (data.level) {
@@ -108,17 +116,51 @@ async function refresh() {
   catch (err) { $("state").textContent = "控制面没有响应"; }
 }
 
-$("save").onclick = async () => {
-  await api("/api/config", {
-    baseUrl: $("baseUrl").value,
-    model: $("model").value,
+function formBody() {
+  return {
+    baseUrl: $("baseUrl").value.trim(),
+    model: $("model").value.trim(),
     apiKey: $("apiKey").value,
     warp: Number($("warp").value),
     maxLevel: Number($("maxLevel").value),
     freeplay: $("freeplay").checked,
-  });
-  $("apiKey").value = "";
-  refresh();
+  };
+}
+
+$("save").onclick = async () => {
+  try {
+    await api("/api/config", formBody());
+    $("apiKey").value = "";
+    $("formMsg").textContent = "设置已保存";
+    refresh();
+  } catch (err) {
+    $("formMsg").textContent = String(err.message || err);
+  }
+};
+$("probe").onclick = async () => {
+  $("probe").disabled = true;
+  $("formMsg").textContent = "正在探测模型…";
+  try {
+    const body = formBody();
+    const data = await api("/api/models", { baseUrl: body.baseUrl, apiKey: body.apiKey });
+    const models = data.models || [];
+    const list = $("modelList");
+    list.replaceChildren();
+    for (const id of models) {
+      const option = document.createElement("option");
+      option.value = id;
+      list.appendChild(option);
+    }
+    if (!$("model").value.trim() && models.length) {
+      $("model").value = models[0];
+    }
+    $("formMsg").textContent = "探测到 " + models.length + " 个模型，可在模型框中选择，选好后保存设置";
+    refresh();
+  } catch (err) {
+    $("formMsg").textContent = String(err.message || err);
+  } finally {
+    $("probe").disabled = false;
+  }
 };
 $("install").onclick = async () => { await api("/api/install-mod", {}); refresh(); };
 $("start").onclick = async () => { await api("/api/start", {}); refresh(); };

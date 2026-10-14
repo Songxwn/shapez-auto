@@ -74,6 +74,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/", s.page)
 	mux.HandleFunc("/api/status", s.status)
 	mux.HandleFunc("/api/config", s.saveConfig)
+	mux.HandleFunc("/api/models", s.listModels)
 	mux.HandleFunc("/api/install-mod", s.installMod)
 	mux.HandleFunc("/api/start", s.start)
 	mux.HandleFunc("/api/stop", s.stop)
@@ -141,6 +142,7 @@ func (s *Service) saveConfig(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(next.Model) == "" {
 		next.Model = "gpt-4o-mini"
 	}
+	next.BaseURL = strings.TrimRight(strings.TrimSpace(next.BaseURL), "/")
 	s.cfg = next
 	if err := s.persist(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -148,6 +150,45 @@ func (s *Service) saveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log("已保存设置")
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Service) listModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		BaseURL string `json:"baseUrl"`
+		APIKey  string `json:"apiKey"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	base := strings.TrimSpace(body.BaseURL)
+	if base == "" {
+		base = s.cfg.BaseURL
+	}
+	key := strings.TrimSpace(body.APIKey)
+	if key == "" {
+		key = s.cfg.APIKey
+	}
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	models, err := llm.ListModels(ctx, base, key)
+	if err != nil {
+		s.mu.Lock()
+		s.log("探测模型失败: " + err.Error())
+		s.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	s.mu.Lock()
+	s.log(fmt.Sprintf("探测到 %d 个模型", len(models)))
+	s.mu.Unlock()
+	writeJSON(w, map[string]any{"models": models})
 }
 
 func (s *Service) installMod(w http.ResponseWriter, r *http.Request) {

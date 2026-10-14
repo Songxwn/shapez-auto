@@ -10,7 +10,7 @@
 
 1. 从仓库的 Releases 下载 `shapez-auto-windows-amd64-setup.exe` 并安装。
 2. 打开 shapez-auto。浏览器会进入本机控制面 `http://127.0.0.1:17831/`。
-3. 填写外部模型的接口地址、模型和 API Key。地址需要兼容 `POST /v1/chat/completions`。留空 API Key 时只用内置求解。
+3. 填写外部模型的接口地址和 API Key。地址需要兼容 `POST /v1/chat/completions`。点「探测可用模型」会请求该地址的 `/models`，再从列表里选择模型。留空 API Key 时只用内置求解。
 4. 点击「安装游戏模组」。模组会写到 `%APPDATA%\shapez.io\mods\shapez-auto.js`。
 5. 完全退出并重新打开 Steam 版 shapez.io（需要 1.5 及以上的模组支持）。进入一局游戏。
 6. 回到控制面，点击「开始自动通关」。
