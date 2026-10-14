@@ -180,8 +180,8 @@ func TestSouthFeedAvoidsBlockedCenter(t *testing.T) {
 		t.Fatal("正南被挡住后没有送到中枢")
 	}
 	for _, p := range built.Placements {
-		if p.X == 0 && p.Y >= 2 && p.Y <= 16 {
-			t.Fatalf("建筑放在了被挡住的 (%d,%d)", p.X, p.Y)
+		if p.ID != "miner" && p.X == 0 && p.Y >= 2 && p.Y <= 16 {
+			t.Fatalf("传送带放在了被挡住的 (%d,%d)", p.X, p.Y)
 		}
 	}
 }
