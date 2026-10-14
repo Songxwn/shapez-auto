@@ -2,7 +2,7 @@ const METADATA = {
     website: "https://github.com/Songxwn/shapez-auto",
     author: "shapez-auto",
     name: "shapez-auto",
-    version: "0.1.2",
+    version: "0.1.3",
     id: "shapez-auto",
     description: "Connects to a local planner and completes levels automatically.",
     minimumGameVersion: ">=1.5.0",
@@ -16,6 +16,7 @@ class Mod extends shapez.Mod {
         this.cachedLevel = 0;
         this.cachedResources = [];
         this.busy = false;
+        this.playing = false;
         this.timer = 0;
         const start = (root) => {
             this.root = root;
@@ -49,6 +50,7 @@ class Mod extends shapez.Mod {
         this.busy = true;
         try {
             const snap = this.snapshot();
+            if (this.playing) this.dismissOverlays();
             const res = await fetch("http://127.0.0.1:17831/api/tick", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -56,6 +58,8 @@ class Mod extends shapez.Mod {
             });
             if (!res.ok) throw new Error("控制面 " + res.status);
             const plan = await res.json();
+            this.playing = plan.action === "build";
+            if (this.playing) this.dismissOverlays();
             if (plan.action === "build" && plan.id && plan.id !== this.lastPlan) {
                 this.apply(plan);
                 this.lastPlan = plan.id;
@@ -188,6 +192,59 @@ class Mod extends shapez.Mod {
             this.badge("摆放失败: " + err);
         }
         this.buyUpgrades();
+    }
+
+    dismissOverlays() {
+        const root = this.root;
+        const hud = root && root.hud;
+        if (hud && hud.parts) {
+            const unlock = hud.parts.unlockNotification;
+            if (unlock && unlock.visible) {
+                try {
+                    if (unlock.element) {
+                        const btn = unlock.element.querySelector("button.close");
+                        if (btn) btn.classList.add("unlocked");
+                    }
+                    if (typeof unlock.close === "function") unlock.close();
+                    if (hud.signals && hud.signals.unlockNotificationFinished && hud.signals.unlockNotificationFinished.dispatch) {
+                        hud.signals.unlockNotificationFinished.dispatch();
+                    }
+                } catch (err) {}
+                if (unlock.visible) this.clickNextButtons();
+            }
+            const dialogs = hud.parts.dialogs;
+            if (dialogs && dialogs.dialogStack && dialogs.dialogStack.length) {
+                const top = dialogs.dialogStack[dialogs.dialogStack.length - 1];
+                try {
+                    const buttons = top.element ? top.element.querySelectorAll("button") : [];
+                    let clicked = false;
+                    for (let i = buttons.length - 1; i >= 0; i--) {
+                        buttons[i].click();
+                        clicked = true;
+                        break;
+                    }
+                    if (!clicked && typeof dialogs.closeDialog === "function") dialogs.closeDialog(top);
+                } catch (err) {}
+            }
+            const advantages = hud.parts.standaloneAdvantages;
+            if (advantages && advantages.visible && typeof advantages.close === "function") {
+                try { advantages.close(); } catch (err) {}
+            }
+        } else {
+            this.clickNextButtons();
+        }
+    }
+
+    clickNextButtons() {
+        const nodes = document.querySelectorAll("#ingame_HUD_UnlockNotification button.close, #ingame_HUD_ModalDialogs button");
+        for (let i = 0; i < nodes.length; i++) {
+            const el = nodes[i];
+            const text = (el.innerText || "");
+            const next = el.classList.contains("close") || text.indexOf("下一") >= 0 || text.toLowerCase().indexOf("next") >= 0 || text === "OK" || text === "Ok";
+            if (!next) continue;
+            el.classList.add("unlocked");
+            try { el.click(); } catch (err) {}
+        }
     }
 
     buyUpgrades() {

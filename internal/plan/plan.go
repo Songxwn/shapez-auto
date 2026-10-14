@@ -35,6 +35,7 @@ type Plan struct {
 // Program 是外部模型返回的加工节点。验证通过才会替换内置求解。
 type Program struct {
 	Comment string `json:"comment"`
+	Copies  int    `json:"copies,omitempty"`
 	Nodes   []Node `json:"nodes"`
 }
 
@@ -51,12 +52,32 @@ type Node struct {
 }
 
 // Compile 求解并布局。override 非空且演算结果正确时优先使用。
-func Compile(req Request, warp int, override *Program) (Plan, error) {
+// speedup 大于 0 时提高加速倍数，并尽量并行多条产线。
+func Compile(req Request, warp int, override *Program, speedup int) (Plan, error) {
 	if warp < 1 {
 		warp = 8
 	}
+	if speedup < 0 {
+		speedup = 0
+	}
+	if speedup > 3 {
+		speedup = 3
+	}
+	if speedup > 0 {
+		warp *= 1 + speedup
+		if warp > 60 {
+			warp = 60
+		}
+	}
 	if req.ThroughputOnly && warp < 16 {
 		warp = 16
+	}
+	copies := 1 + speedup
+	if override != nil && override.Copies > copies {
+		copies = override.Copies
+	}
+	if copies > 4 {
+		copies = 4
 	}
 	plan := Plan{
 		Action: "build",
@@ -81,7 +102,7 @@ func Compile(req Request, warp int, override *Program) (Plan, error) {
 		if altErr == nil {
 			got, evalErr := Eval(alt)
 			if evalErr == nil && got.Form.Hash() == req.Shape {
-				if places, layoutErr := Layout(alt, req.Resources); layoutErr == nil {
+				if places, layoutErr := LayoutCopies(alt, req.Resources, copies); layoutErr == nil {
 					plan.Placements = places
 					plan.Source = "llm"
 					if override.Comment != "" {
@@ -89,13 +110,13 @@ func Compile(req Request, warp int, override *Program) (Plan, error) {
 					} else {
 						plan.Comment = "已采用外部模型给出的加工步骤"
 					}
-					plan.ID = planKey(req, fmt.Sprintf("%s-%d", plan.Source, len(places)))
+					plan.ID = planKey(req, fmt.Sprintf("%s-%d-%d", plan.Source, len(places), speedup))
 					return plan, nil
 				}
 			}
 		}
 	}
-	places, err := Layout(chosen, req.Resources)
+	places, err := LayoutCopies(chosen, req.Resources, copies)
 	if err != nil {
 		plan.Action = "error"
 		plan.Error = err.Error()
@@ -104,7 +125,10 @@ func Compile(req Request, warp int, override *Program) (Plan, error) {
 		return plan, nil
 	}
 	plan.Placements = places
-	plan.ID = planKey(req, fmt.Sprintf("%s-%d", plan.Source, len(places)))
+	if speedup > 0 {
+		plan.Comment = fmt.Sprintf("推进偏慢，已并行 %d 条产线并提高加速", copies)
+	}
+	plan.ID = planKey(req, fmt.Sprintf("%s-%d-%d", plan.Source, len(places), speedup))
 	return plan, nil
 }
 

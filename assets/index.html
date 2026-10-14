@@ -9,6 +9,7 @@
     body { margin: 0; font: 15px/1.5 "Segoe UI", sans-serif; background: #17191e; color: #e7e9ee; }
     main { max-width: 820px; margin: 0 auto; padding: 28px 20px 48px; }
     h1 { font-size: 28px; margin: 0 0 6px; }
+    #version { margin: 0 0 8px; color: #8b93a3; font-size: 13px; }
     p { color: #b7bdc9; }
     section { background: #22262e; border: 1px solid #343a46; border-radius: 12px; padding: 16px; margin-top: 16px; }
     label { display: block; margin: 10px 0 4px; color: #c5cad3; }
@@ -29,6 +30,7 @@
 <body>
 <main>
   <h1>shapez-auto</h1>
+  <p id="version">版本</p>
   <p>接入外部大模型，驱动 Steam 版 shapez.io 自动摆厂并加速通关。网页版游戏没有模组接口，不能使用。</p>
 
   <section>
@@ -102,6 +104,7 @@ function fill(data) {
     formReady = true;
   }
   if (data.hasKey) $("apiKey").placeholder = "已保存，留空表示不修改";
+  if (data.version) $("version").textContent = "版本 " + data.version;
   $("state").textContent = data.running ? "自动通关进行中" : "已停止";
   if (data.level) {
     const done = Math.floor(data.delivered || 0);

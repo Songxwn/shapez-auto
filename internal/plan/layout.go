@@ -75,19 +75,70 @@ func inBounds(p pos) bool {
 	return p.X >= -80 && p.X <= 160 && p.Y >= -80 && p.Y <= 220
 }
 
+// hubFeeds 是中枢四个方向的进料格。南、东、西、北各一条。
+var hubFeeds = []struct {
+	at  pos
+	out string
+}{
+	{pos{0, 2}, "north"},
+	{pos{2, 0}, "west"},
+	{pos{-3, 0}, "east"},
+	{pos{0, -3}, "south"},
+}
+
 // Layout 把加工树摆到地图上，并把成品送进中枢南侧。
 func Layout(op *Op, resources []Resource) ([]Placement, error) {
+	return LayoutCopies(op, resources, 1)
+}
+
+// LayoutCopies 摆多条相同产线，分别从不同方向送进中枢。资源不够时保留已经接上的产线。
+func LayoutCopies(op *Op, resources []Resource, copies int) ([]Placement, error) {
+	if copies < 1 {
+		copies = 1
+	}
+	if copies > len(hubFeeds) {
+		copies = len(hubFeeds)
+	}
 	w := newWorld(resources)
-	landing, err := w.layout(op)
-	if err != nil {
-		return nil, err
+	done := 0
+	for i := 0; i < copies; i++ {
+		places, occ, used := w.snapshot()
+		landing, err := w.layout(op)
+		if err != nil {
+			w.restore(places, occ, used)
+			if done == 0 {
+				return nil, err
+			}
+			break
+		}
+		feed := hubFeeds[i]
+		belts, ok := route(w.base(), landing.At, landing.In, feed.at, feed.out)
+		if !ok {
+			w.restore(places, occ, used)
+			if done == 0 {
+				return nil, fmt.Errorf("无法把成品送到中枢")
+			}
+			break
+		}
+		w.commit(belts)
+		done++
 	}
-	belts, ok := route(w.base(), landing.At, landing.In, pos{0, 2}, "north")
-	if !ok {
-		return nil, fmt.Errorf("无法把成品送到中枢")
-	}
-	w.commit(belts)
 	return w.places, nil
+}
+
+func (w *world) snapshot() ([]Placement, occMap, map[pos]bool) {
+	places := append([]Placement(nil), w.places...)
+	used := make(map[pos]bool, len(w.used))
+	for k, v := range w.used {
+		used[k] = v
+	}
+	return places, w.occ.clone(), used
+}
+
+func (w *world) restore(places []Placement, occ occMap, used map[pos]bool) {
+	w.places = places
+	w.occ = occ
+	w.used = used
 }
 
 type outlet struct {

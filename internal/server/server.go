@@ -14,6 +14,7 @@ import (
 
 	"shapez-auto/internal/llm"
 	"shapez-auto/internal/plan"
+	"shapez-auto/internal/version"
 )
 
 // Config 是控制面保存的设置。
@@ -35,9 +36,19 @@ type Service struct {
 	logs     []string
 	lastReq  plan.Request
 	lastPlan plan.Plan
+	pace     pace
 	index    []byte
 	mod      []byte
 	icon     []byte
+}
+
+// pace 记录当前关卡的交付进度，用来判断要不要加快。
+type pace struct {
+	level     int
+	shape     string
+	mark      time.Time
+	delivered float64
+	speedups  int
 }
 
 // New 创建控制面并读取已保存的设置。
@@ -119,6 +130,7 @@ func (s *Service) status(w http.ResponseWriter, r *http.Request) {
 		"error":    s.lastPlan.Error,
 		"modsPath": modsDir(),
 		"logs":     append([]string(nil), s.logs...),
+		"version":  version.Current,
 	})
 }
 
@@ -275,19 +287,48 @@ func (s *Service) tick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.lastPlan.Action == "build" && s.lastPlan.Level == req.Level && s.lastPlan.Shape == req.Shape && s.lastPlan.ID != "" {
-		cached := s.lastPlan
-		s.mu.Unlock()
-		writeJSON(w, cached)
-		return
+		if !s.shouldSpeedUp(req) {
+			cached := s.lastPlan
+			s.mu.Unlock()
+			writeJSON(w, cached)
+			return
+		}
+	} else {
+		s.pace = pace{level: req.Level, shape: req.Shape, mark: time.Now(), delivered: req.Delivered}
 	}
 	cfg := s.cfg
-	s.log(fmt.Sprintf("第 %d 关 %s，开始规划", req.Level, req.Shape))
+	speedup := s.pace.speedups
+	if speedup > 0 {
+		s.log(fmt.Sprintf("第 %d 关推进偏慢，第 %d 次加快产线", req.Level, speedup))
+	} else {
+		s.log(fmt.Sprintf("第 %d 关 %s，开始规划", req.Level, req.Shape))
+	}
+	prev := s.lastPlan
 	s.mu.Unlock()
 
-	built := s.build(req, cfg)
+	built := s.build(req, cfg, speedup)
 
 	s.mu.Lock()
+	if built.Action != "build" && speedup > 0 && prev.Action == "build" {
+		if prev.Warp < 60 {
+			prev.Warp *= 2
+			if prev.Warp > 60 {
+				prev.Warp = 60
+			}
+		}
+		s.lastPlan = prev
+		s.pace.mark = time.Now()
+		s.pace.delivered = req.Delivered
+		s.log("加快布局失败，改为提高加速倍数")
+		s.mu.Unlock()
+		writeJSON(w, prev)
+		return
+	}
 	s.lastPlan = built
+	s.pace.level = req.Level
+	s.pace.shape = req.Shape
+	s.pace.mark = time.Now()
+	s.pace.delivered = req.Delivered
 	if built.Error != "" {
 		s.log("规划失败: " + built.Error)
 	} else {
@@ -297,12 +338,53 @@ func (s *Service) tick(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, built)
 }
 
-func (s *Service) build(req plan.Request, cfg Config) plan.Plan {
+// shouldSpeedUp 在持锁时调用。进度明显偏慢时记一次加快，最多 3 次。
+func (s *Service) shouldSpeedUp(req plan.Request) bool {
+	if s.pace.level != req.Level || s.pace.shape != req.Shape || s.pace.mark.IsZero() {
+		s.pace = pace{level: req.Level, shape: req.Shape, mark: time.Now(), delivered: req.Delivered}
+		return false
+	}
+	if !slowProgress(req.ThroughputOnly, req.Required, s.pace.delivered, req.Delivered, time.Since(s.pace.mark), s.pace.speedups) {
+		return false
+	}
+	s.pace.speedups++
+	return true
+}
+
+// slowProgress 判断一段时间里交付是否偏慢。speedups 达到 3 次后不再加快。
+func slowProgress(throughput bool, required, before, now float64, elapsed time.Duration, speedups int) bool {
+	if speedups >= 3 || elapsed < 20*time.Second {
+		return false
+	}
+	if throughput {
+		return required > 0 && now < required*0.6
+	}
+	gain := now - before
+	remain := required - now
+	if remain <= 0 {
+		return false
+	}
+	if gain < 1 {
+		return true
+	}
+	eta := remain / (gain / elapsed.Seconds())
+	return eta > 120
+}
+
+func (s *Service) build(req plan.Request, cfg Config, speedup int) plan.Plan {
 	var override *plan.Program
+	hint := ""
+	if speedup > 0 {
+		copies := 1 + speedup
+		if copies > 4 {
+			copies = 4
+		}
+		hint = fmt.Sprintf("第 %d 次加快。请把 copies 设为 %d，用并行产线提高吞吐，目标形状不变。", speedup, copies)
+	}
 	if strings.TrimSpace(cfg.APIKey) != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
 		defer cancel()
-		program, err := llm.Complete(ctx, cfg.BaseURL, cfg.APIKey, cfg.Model, req.Shape, req.Rewards, resourceSummary(req.Resources))
+		program, err := llm.Complete(ctx, cfg.BaseURL, cfg.APIKey, cfg.Model, req.Shape, req.Rewards, resourceSummary(req.Resources), hint)
 		if err != nil {
 			s.mu.Lock()
 			s.log("外部模型不可用，改用内置求解: " + err.Error())
@@ -311,7 +393,7 @@ func (s *Service) build(req plan.Request, cfg Config) plan.Plan {
 			override = program
 		}
 	}
-	built, err := plan.Compile(req, cfg.Warp, override)
+	built, err := plan.Compile(req, cfg.Warp, override, speedup)
 	if err != nil {
 		return plan.Plan{Action: "error", Error: err.Error(), Level: req.Level, Shape: req.Shape}
 	}

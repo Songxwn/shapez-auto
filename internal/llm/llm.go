@@ -16,7 +16,7 @@ import (
 )
 
 // Complete 调用 OpenAI 兼容的对话接口，请模型给出一份加工步骤。
-func Complete(ctx context.Context, baseURL, apiKey, model, shape string, rewards []string, resources []string) (*plan.Program, error) {
+func Complete(ctx context.Context, baseURL, apiKey, model, shape string, rewards []string, resources []string, hint string) (*plan.Program, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("未配置 API Key")
 	}
@@ -27,16 +27,24 @@ func Complete(ctx context.Context, baseURL, apiKey, model, shape string, rewards
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	user, _ := json.Marshal(map[string]any{
+	userBody := map[string]any{
 		"target":    shape,
 		"rewards":   rewards,
 		"resources": resources,
-	})
+	}
+	if strings.TrimSpace(hint) != "" {
+		userBody["note"] = hint
+	}
+	user, _ := json.Marshal(userBody)
+	prompt := systemPrompt
+	if strings.TrimSpace(hint) != "" {
+		prompt += "\n当前产线吞吐不够。请提高 copies（2 到 4）来并行相同产线，少绕路。target 的形状哈希必须完全一致。"
+	}
 	body, _ := json.Marshal(map[string]any{
 		"model":       model,
 		"temperature": 0,
 		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
+			{"role": "system", "content": prompt},
 			{"role": "user", "content": string(user)},
 		},
 	})
@@ -233,4 +241,4 @@ cut-left 是切割器朝北时的左出口（左下+左上），cut-right 是右
 rot-cw 的 n 是顺时针 90 度的次数。paint 用 in 表示形状、lower 表示染料节点。
 stack 的 lower 是下层、upper 是上层。mix 的 lower 和 upper 是两种染料。
 最后用 deliver，in 指向成品。染料按光的加色混合：红+绿=黄，红+蓝=紫，绿+蓝=青，红+绿+蓝=白。
-如果目标可以用整块、半块或单个象限做出来，不要拆得更碎。JSON 形如 {"comment":"...","nodes":[...]}。`
+如果目标可以用整块、半块或单个象限做出来，不要拆得更碎。可选字段 copies 是并行的相同产线数量，取 1 到 4。JSON 形如 {"comment":"...","copies":1,"nodes":[...]}。`

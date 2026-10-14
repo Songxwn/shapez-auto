@@ -100,7 +100,7 @@ func TestLayoutReachesHub(t *testing.T) {
 			Shape:     shape,
 			Rewards:   rewards[i],
 			Resources: testResources(),
-		}, 8, nil)
+		}, 8, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
