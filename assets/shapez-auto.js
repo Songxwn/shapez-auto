@@ -2,7 +2,7 @@ const METADATA = {
     website: "https://github.com/Songxwn/shapez-auto",
     author: "shapez-auto",
     name: "shapez-auto",
-    version: "0.1.3",
+    version: "0.1.4",
     id: "shapez-auto",
     description: "Connects to a local planner and completes levels automatically.",
     minimumGameVersion: ">=1.5.0",
@@ -17,6 +17,7 @@ class Mod extends shapez.Mod {
         this.cachedResources = [];
         this.busy = false;
         this.playing = false;
+        this.missed = 0;
         this.timer = 0;
         const start = (root) => {
             this.root = root;
@@ -114,6 +115,7 @@ class Mod extends shapez.Mod {
             resources: this.cachedResources,
             demoEnded: root.hubGoals.isEndOfDemoReached(),
             freeplay: root.hubGoals.isFreePlay(),
+            missed: this.missed || 0,
         };
     }
 
@@ -169,21 +171,32 @@ class Mod extends shapez.Mod {
             }
             const registry = shapez.gMetaBuildingRegistry;
             const places = plan.placements || [];
+            let missed = 0;
             for (let i = 0; i < places.length; i++) {
                 const place = places[i];
-                if (!registry.hasId(place.id)) continue;
+                if (!registry.hasId(place.id)) {
+                    missed++;
+                    continue;
+                }
                 const building = registry.findById(place.id);
+                const rotation = place.rotation || 0;
+                const rotationVariant = place.rotationVariant || 0;
+                let entity = null;
                 try {
-                    root.logic.tryPlaceBuilding({
+                    entity = root.logic.tryPlaceBuilding({
                         origin: new shapez.Vector(place.x, place.y),
-                        rotation: place.rotation || 0,
-                        originalRotation: place.rotation || 0,
-                        rotationVariant: place.rotationVariant || 0,
+                        rotation: rotation,
+                        originalRotation: rotation,
+                        rotationVariant: rotationVariant,
                         variant: place.variant || "default",
                         building: building,
                     });
-                } catch (err) {}
+                } catch (err) {
+                    entity = null;
+                }
+                if (!entity) missed++;
             }
+            this.missed = missed;
         };
         try {
             root.logic.performBulkOperation(run);

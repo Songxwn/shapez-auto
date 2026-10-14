@@ -17,6 +17,7 @@ type Request struct {
 	Resources      []Resource `json:"resources"`
 	DemoEnded      bool       `json:"demoEnded"`
 	Freeplay       bool       `json:"freeplay"`
+	Missed         int        `json:"missed"`
 }
 
 // Plan 是交给模组执行的方案。

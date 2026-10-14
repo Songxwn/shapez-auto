@@ -49,6 +49,7 @@ type pace struct {
 	mark      time.Time
 	delivered float64
 	speedups  int
+	solver    bool
 }
 
 // New 创建控制面并读取已保存的设置。
@@ -286,7 +287,10 @@ func (s *Service) tick(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, plan.Plan{Action: "done", Comment: "已达到设定关卡"})
 		return
 	}
-	if s.lastPlan.Action == "build" && s.lastPlan.Level == req.Level && s.lastPlan.Shape == req.Shape && s.lastPlan.ID != "" {
+	if req.Missed > 0 && !s.pace.solver {
+		s.pace.solver = true
+		s.log(fmt.Sprintf("有 %d 个建筑没放上，改用内置产线", req.Missed))
+	} else if s.lastPlan.Action == "build" && s.lastPlan.Level == req.Level && s.lastPlan.Shape == req.Shape && s.lastPlan.ID != "" {
 		if !s.shouldSpeedUp(req) {
 			cached := s.lastPlan
 			s.mu.Unlock()
@@ -298,6 +302,10 @@ func (s *Service) tick(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg
 	speedup := s.pace.speedups
+	forceSolver := s.pace.solver || (speedup > 0 && req.Delivered <= s.pace.delivered+0.5)
+	if forceSolver {
+		s.pace.solver = true
+	}
 	if speedup > 0 {
 		s.log(fmt.Sprintf("第 %d 关推进偏慢，第 %d 次加快产线", req.Level, speedup))
 	} else {
@@ -306,7 +314,7 @@ func (s *Service) tick(w http.ResponseWriter, r *http.Request) {
 	prev := s.lastPlan
 	s.mu.Unlock()
 
-	built := s.build(req, cfg, speedup)
+	built := s.build(req, cfg, speedup, forceSolver)
 
 	s.mu.Lock()
 	if built.Action != "build" && speedup > 0 && prev.Action == "build" {
@@ -371,7 +379,7 @@ func slowProgress(throughput bool, required, before, now float64, elapsed time.D
 	return eta > 120
 }
 
-func (s *Service) build(req plan.Request, cfg Config, speedup int) plan.Plan {
+func (s *Service) build(req plan.Request, cfg Config, speedup int, forceSolver bool) plan.Plan {
 	var override *plan.Program
 	hint := ""
 	if speedup > 0 {
@@ -381,7 +389,11 @@ func (s *Service) build(req plan.Request, cfg Config, speedup int) plan.Plan {
 		}
 		hint = fmt.Sprintf("第 %d 次加快。请把 copies 设为 %d，用并行产线提高吞吐，目标形状不变。", speedup, copies)
 	}
-	if strings.TrimSpace(cfg.APIKey) != "" {
+	if forceSolver {
+		s.mu.Lock()
+		s.log("当前产线没有送进中枢，停止使用外部模型，改用内置直线入口")
+		s.mu.Unlock()
+	} else if strings.TrimSpace(cfg.APIKey) != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
 		defer cancel()
 		program, err := llm.Complete(ctx, cfg.BaseURL, cfg.APIKey, cfg.Model, req.Shape, req.Rewards, resourceSummary(req.Resources), hint)

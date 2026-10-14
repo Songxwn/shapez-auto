@@ -111,8 +111,7 @@ func LayoutCopies(op *Op, resources []Resource, copies int) ([]Placement, error)
 			}
 			break
 		}
-		feed := hubFeeds[i]
-		belts, ok := route(w.base(), landing.At, landing.In, feed.at, feed.out)
+		belts, ok := w.connectHub(landing, i)
 		if !ok {
 			w.restore(places, occ, used)
 			if done == 0 {
@@ -124,6 +123,57 @@ func LayoutCopies(op *Op, resources []Resource, copies int) ([]Placement, error)
 		done++
 	}
 	return w.places, nil
+}
+
+// connectHub 把成品送进中枢。南侧入口先接到直线走廊，避免绕到中枢旁边却不进去。
+func (w *world) connectHub(landing outlet, index int) ([]Placement, bool) {
+	if index == 0 {
+		if belts, ok := w.connectSouth(landing); ok {
+			return belts, true
+		}
+	}
+	feed := hubFeeds[index]
+	return route(w.base(), landing.At, landing.In, feed.at, feed.out)
+}
+
+// connectSouth 要求路径朝北到达走廊入口，后面几格固定是朝北的直带，末端对准中枢南侧。
+func (w *world) connectSouth(landing outlet) ([]Placement, bool) {
+	for span := 4; span <= 14; span++ {
+		gate := pos{0, 2 + span}
+		var corridor []pos
+		open := inBounds(gate) && !w.blocked(gate)
+		for y := gate.Y - 1; y >= 2; y-- {
+			p := pos{0, y}
+			if !inBounds(p) || w.blocked(p) {
+				open = false
+				break
+			}
+			corridor = append(corridor, p)
+		}
+		if !open || len(corridor) == 0 {
+			continue
+		}
+		trial := w.base()
+		for _, p := range corridor {
+			trial[p] = true
+		}
+		belts, ok := route(trial, landing.At, landing.In, gate, "north")
+		if !ok {
+			continue
+		}
+		rot, variant, poseOK := BeltPose("south", "north")
+		if !poseOK {
+			return nil, false
+		}
+		for _, p := range corridor {
+			belts = append(belts, Placement{
+				ID: "belt", X: p.X, Y: p.Y,
+				Rotation: rot, RotationVariant: variant, Variant: "default",
+			})
+		}
+		return belts, true
+	}
+	return nil, false
 }
 
 func (w *world) snapshot() ([]Placement, occMap, map[pos]bool) {

@@ -130,6 +130,35 @@ func testResources() []Resource {
 	return out
 }
 
+func TestSouthFeedIsStraight(t *testing.T) {
+	built, err := Compile(Request{
+		Level:     6,
+		Shape:     "Cu------",
+		Rewards:   []string{"reward_cutter_and_trash", "reward_rotater"},
+		Resources: testResources(),
+	}, 8, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.Error != "" {
+		t.Fatal(built.Error)
+	}
+	var feed *Placement
+	for i := range built.Placements {
+		p := &built.Placements[i]
+		if p.ID == "belt" && p.X == 0 && p.Y == 2 {
+			feed = p
+		}
+	}
+	if feed == nil {
+		t.Fatal("中枢南侧没有传送带")
+	}
+	in, out := BeltIO(feed.Rotation, feed.RotationVariant)
+	if in != "south" || out != "north" {
+		t.Fatalf("入口方向是 %s -> %s", in, out)
+	}
+}
+
 func reachesHub(places []Placement) bool {
 	type building struct {
 		id  string
